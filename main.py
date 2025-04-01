@@ -1,19 +1,19 @@
 import tkinter as tk
 import threading
 import json
+import requests
 from tkinter import ttk, messagebox
 from datetime import datetime, timedelta
-from tkcalendar import DateEntry  # New: DateEntry widget for calendar date selection
+from tkcalendar import DateEntry  # Calendar widget for date selection
 from models import InventoryItem
 from inventory_service import add_inventory_item, get_inventory_items, delete_inventory_item
-from notification_service import start_notification_scheduler, set_notification_callback, check_and_notify, remove_stale_items
 
 # Global variables for autocomplete
-COMMON_INGREDIENTS = {}   # Dictionary: ingredient name -> default unit
+COMMON_INGREDIENTS = {}       # Mapping: ingredient name -> default unit
 common_ingredients_list = []  # List of ingredient names
 
 def load_common_ingredients():
-    """Load common ingredients from JSON file."""
+    """Load common ingredients from a JSON file."""
     global COMMON_INGREDIENTS, common_ingredients_list
     try:
         with open("common_ingredients.json", "r") as f:
@@ -25,18 +25,16 @@ def load_common_ingredients():
         print("Error loading common ingredients:", e)
 
 def update_suggestions(event):
-    """Update suggestion Listbox based on text typed in entry_name."""
+    """Update the suggestion Listbox based on text typed in the item name entry."""
     text = entry_name.get().strip().lower()
     suggestion_box.delete(0, tk.END)
     if text == "":
         suggestion_box.place_forget()
         return
-    # Find matches from the common ingredients list
     matches = [item for item in common_ingredients_list if text in item.lower()]
     if matches:
-        # Update the Listbox height to match the number of suggestions
         suggestion_box.config(height=len(matches))
-        # Place the suggestion box below the entry_name widget
+        # Place suggestion_box just below entry_name using widget coordinates
         x = entry_name.winfo_x()
         y = entry_name.winfo_y() + entry_name.winfo_height()
         suggestion_box.place(x=x, y=y, width=entry_name.winfo_width())
@@ -57,27 +55,25 @@ def on_suggestion_select(event):
         suggestion_box.place_forget()
 
 def hide_suggestions(event):
-    """Hide the suggestion Listbox when focus is lost."""
+    """Hide the suggestion Listbox when the item name entry loses focus."""
     suggestion_box.place_forget()
 
 def add_item():
-    """Retrieve input values, validate them, create an InventoryItem (with unit), and add it to the DB."""
+    """Retrieve values, validate, create an InventoryItem (with unit), and add it to the database."""
     name = entry_name.get().strip()
     quantity_str = entry_quantity.get().strip()
-    # Get expiry date from the DateEntry widget as a string in the specified format
+    # Get expiry date from the DateEntry widget
     expiry_str = entry_expiry.get_date().strftime("%Y-%m-%d")
     unit = unit_combobox.get().strip()
     
     if not name or not quantity_str or not expiry_str or not unit:
         messagebox.showerror("Error", "Please fill in all fields.")
         return
-    
     try:
         quantity = int(quantity_str)
     except ValueError:
         messagebox.showerror("Error", "Quantity must be an integer.")
         return
-    
     try:
         expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d")
     except ValueError:
@@ -93,7 +89,9 @@ def add_item():
         messagebox.showerror("Error", "Failed to add item.")
 
 def refresh_inventory():
-    """Remove stale items, auto-sort by expiry date, and populate the Treeview with proper tags."""
+    """Remove stale items, auto-sort by expiry date, and populate the Treeview with color-coded rows."""
+    # Import remove_stale_items locally to avoid circular dependencies.
+    from notification_service import remove_stale_items
     remove_stale_items()
     for i in tree.get_children():
         tree.delete(i)
@@ -161,11 +159,75 @@ def filter_inventory(*args):
                     item.id, item.name, item.quantity, item.unit, item.expiry_date.strftime("%Y-%m-%d")
                 ))
 
+def format_inventory_for_prompt():
+    """Return a formatted string listing each inventory item with name and quantity (with unit)."""
+    items = get_inventory_items()
+    if not items:
+        return "No items in inventory."
+    lines = []
+    for item in items:
+        lines.append(f"{item.name} ({item.quantity}{item.unit})")
+    return "\n".join(lines)
+
+def suggest_recipes(api_key):
+    inventory_text = format_inventory_for_prompt()
+    prompt_text = (
+        "Based on the following inventory data, suggest recipes that will prioritize items near expiry"
+        "to reduce food waste try to suggest recipes that use as much of the already available inventory so that less money needs to spent on buying new stuff. For each recipe, provide a recipe name, ingredients list, and brief instructions.\n\n"
+        "Inventory Data:\n" + inventory_text
+    )
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "google/gemma-3-12b-it:free",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt_text}
+                ]
+            }
+        ]
+    }
+    # Debug: Print payload
+    print("Payload sent to OpenRouter:")
+    print(json.dumps(data, indent=2))
+    
+    response = requests.post(url, headers=headers, data=json.dumps(data))
+    print("Response status:", response.status_code)
+    print("Response body:", response.text)
+    
+    if response.status_code == 200:
+        result = response.json()
+        try:
+            suggestion = result["choices"][0]["message"]["content"].strip()
+        except (KeyError, IndexError):
+            suggestion = "Unexpected response format:\n" + json.dumps(result)
+        return suggestion
+    else:
+        return f"Error {response.status_code}: {response.text}"
+
+def on_suggest_recipes():
+    """Handler for the 'Suggest Recipes' button; display suggestions in a new window."""
+    api_key = "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"  # Replace with your actual API key or load securely
+    suggestion = suggest_recipes(api_key)
+    result_window = tk.Toplevel(root)
+    result_window.title("Recipe Suggestions")
+    result_window.geometry("600x400")
+    text_widget = tk.Text(result_window, wrap="word", font=("Helvetica", 10))
+    text_widget.insert("1.0", suggestion)
+    text_widget.configure(state="disabled")
+    text_widget.pack(expand=True, fill="both")
+
 def run_notifications():
     """Run the notification scheduler with an immediate check after a 5-second delay."""
     import time
     time.sleep(5)
-    check_and_notify()  # Immediate unified notification check on startup
+    from notification_service import check_and_notify, start_notification_scheduler
+    check_and_notify()
     start_notification_scheduler(interval_minutes=1)
 
 def gui_notification(message):
@@ -222,7 +284,6 @@ frame_search.pack(fill="x")
 frame_table = tk.Frame(root, padx=10, pady=10)
 frame_table.pack(fill="both", expand=True)
 
-# Load common ingredients for autocomplete
 load_common_ingredients()
 
 # Create a Listbox for suggestions (initially hidden)
@@ -246,7 +307,6 @@ unit_combobox.grid(row=1, column=3, padx=5, pady=5)
 unit_combobox.set("g")
 
 tk.Label(frame_form, text="Expiry Date (YYYY-MM-DD):", font=("Helvetica", 10)).grid(row=2, column=0, padx=5, pady=5, sticky="e")
-# Replace the plain Entry with a DateEntry from tkcalendar for calendar selection.
 entry_expiry = DateEntry(frame_form, date_pattern="yyyy-mm-dd", font=("Helvetica", 10))
 entry_expiry.grid(row=2, column=1, padx=5, pady=5)
 default_date = datetime.now() + timedelta(days=3)
@@ -259,6 +319,8 @@ btn_refresh = tk.Button(frame_buttons, text="Refresh Inventory", command=refresh
 btn_refresh.grid(row=0, column=1, padx=5, pady=5)
 btn_delete = tk.Button(frame_buttons, text="Delete Selected", command=delete_item, font=("Helvetica", 10))
 btn_delete.grid(row=0, column=2, padx=5, pady=5)
+btn_recipes = tk.Button(frame_buttons, text="Suggest Recipes", command=on_suggest_recipes, font=("Helvetica", 10))
+btn_recipes.grid(row=0, column=3, padx=5, pady=5)
 
 # Search bar to filter inventory items
 tk.Label(frame_search, text="Search:", font=("Helvetica", 10)).pack(side="left", padx=5)
@@ -266,7 +328,7 @@ search_entry = tk.Entry(frame_search, font=("Helvetica", 10))
 search_entry.pack(side="left", padx=5)
 search_entry.bind("<KeyRelease>", filter_inventory)
 
-# Treeview widget for inventory items with sortable columns (including 'unit')
+# Treeview widget for inventory items with sortable columns
 columns = ("id", "name", "quantity", "unit", "expiry_date")
 tree = ttk.Treeview(frame_table, columns=columns, show="headings", selectmode="browse")
 tree.heading("id", text="ID", command=lambda: treeview_sort_column(tree, "id", False))
@@ -281,7 +343,12 @@ for tag, cfg in tree_tag_configs.items():
     tree.tag_configure(tag, **cfg)
 
 refresh_inventory()
-set_notification_callback(gui_notification)
+
+# Import the notification_service module locally and set the notification callback
+import notification_service
+notification_service.set_notification_callback(gui_notification)
+
 notif_thread = threading.Thread(target=run_notifications, daemon=True)
 notif_thread.start()
+
 root.mainloop()
