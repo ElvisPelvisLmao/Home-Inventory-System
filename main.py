@@ -160,21 +160,24 @@ def filter_inventory(*args):
                 ))
 
 def format_inventory_for_prompt():
-    """Return a formatted string listing each inventory item with name and quantity (with unit)."""
+    """Return a formatted string listing each inventory item with name, quantity (with unit), and expiry date."""
     items = get_inventory_items()
     if not items:
         return "No items in inventory."
     lines = []
     for item in items:
-        lines.append(f"{item.name} ({item.quantity}{item.unit})")
+        lines.append(f"{item.name} ({item.quantity}{item.unit}) expires on {item.expiry_date.strftime('%Y-%m-%d')}")
     return "\n".join(lines)
 
-def suggest_recipes(api_key):
+def suggest_recipes(api_key, additional_requests=""):
     inventory_text = format_inventory_for_prompt()
     prompt_text = (
-        "Based on the following inventory data, suggest recipes that will prioritize items near expiry"
-        "to reduce food waste try to suggest recipes that use as much of the already available inventory so that less money needs to spent on buying new stuff. For each recipe, provide a recipe name, ingredients list, and brief instructions.\n\n"
-        "Inventory Data:\n" + inventory_text
+     "Based on the following inventory data, suggest recipes that will prioritize items near expiry " +
+        "to reduce food waste and use as much of the available inventory as possible. It is fair to assume that basic things like water, salt, peper, oil are availalbe" +
+        "If an item is technically expired, note within the recipe that the recipe is valid only if the item is still good to eat. Note that the dates are in YYYY-MM-DD format." +
+        "For each recipe, provide a recipe name, ingredients list, and brief instructions.\n\n" +
+        "Inventory Data:\n" + inventory_text + 
+        "\n\nAdditional Requests:\n" + additional_requests
     )
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
@@ -211,16 +214,30 @@ def suggest_recipes(api_key):
         return f"Error {response.status_code}: {response.text}"
 
 def on_suggest_recipes():
-    """Handler for the 'Suggest Recipes' button; display suggestions in a new window."""
-    api_key = "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"  # Replace with your actual API key or load securely
-    suggestion = suggest_recipes(api_key)
-    result_window = tk.Toplevel(root)
-    result_window.title("Recipe Suggestions")
-    result_window.geometry("600x400")
-    text_widget = tk.Text(result_window, wrap="word", font=("Helvetica", 10))
-    text_widget.insert("1.0", suggestion)
-    text_widget.configure(state="disabled")
-    text_widget.pack(expand=True, fill="both")
+    """Handler for the 'Suggest Recipes' button; disable it while waiting for the API response, then display suggestions."""
+    api_key = "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"  # Replace with your actual API key or load it securely
+    additional = additional_entry.get().strip()
+    # Update the button state and text to inform the user
+    btn_recipes.config(text="Please wait...", state="disabled")
+    
+    def worker():
+        suggestion = suggest_recipes(api_key, additional)
+        # Once suggestion is received, update the GUI in the main thread
+        root.after(0, finish_recipe_suggestion, suggestion)
+    
+    def finish_recipe_suggestion(suggestion):
+        # Restore the button text and state
+        btn_recipes.config(text="Suggest Recipes", state="normal")
+        # Display the recipe suggestions in a new window
+        result_window = tk.Toplevel(root)
+        result_window.title("Recipe Suggestions")
+        result_window.geometry("600x400")
+        text_widget = tk.Text(result_window, wrap="word", font=("Helvetica", 10))
+        text_widget.insert("1.0", suggestion)
+        text_widget.configure(state="disabled")
+        text_widget.pack(expand=True, fill="both")
+    
+    threading.Thread(target=worker, daemon=True).start()
 
 def run_notifications():
     """Run the notification scheduler with an immediate check after a 5-second delay."""
@@ -228,7 +245,7 @@ def run_notifications():
     time.sleep(5)
     from notification_service import check_and_notify, start_notification_scheduler
     check_and_notify()
-    start_notification_scheduler(interval_minutes=1)
+    start_notification_scheduler(interval_minutes=5)
 
 def gui_notification(message):
     """Display a unified notification pop-up in the GUI."""
@@ -321,6 +338,14 @@ btn_delete = tk.Button(frame_buttons, text="Delete Selected", command=delete_ite
 btn_delete.grid(row=0, column=2, padx=5, pady=5)
 btn_recipes = tk.Button(frame_buttons, text="Suggest Recipes", command=on_suggest_recipes, font=("Helvetica", 10))
 btn_recipes.grid(row=0, column=3, padx=5, pady=5)
+# Create a subframe in frame_buttons for additional requests
+frame_additional = tk.Frame(frame_buttons)
+frame_additional.grid(row=0, column=4, padx=5, pady=5, sticky="n")
+# Place a label above the text box inside the subframe.
+tk.Label(frame_additional, text="Additional information for the suggestions:", font=("Helvetica", 10)).pack()
+# Create the entry widget for additional requests inside the subframe.
+additional_entry = tk.Entry(frame_additional, font=("Helvetica", 10), width=30)
+additional_entry.pack()
 
 # Search bar to filter inventory items
 tk.Label(frame_search, text="Search:", font=("Helvetica", 10)).pack(side="left", padx=5)
