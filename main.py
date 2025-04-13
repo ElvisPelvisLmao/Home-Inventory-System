@@ -34,7 +34,6 @@ def update_suggestions(event):
     matches = [item for item in common_ingredients_list if text in item.lower()]
     if matches:
         suggestion_box.config(height=len(matches))
-        # Place suggestion_box just below entry_name using widget coordinates
         x = entry_name.winfo_x()
         y = entry_name.winfo_y() + entry_name.winfo_height()
         suggestion_box.place(x=x, y=y, width=entry_name.winfo_width())
@@ -215,7 +214,7 @@ def suggest_recipes(api_key, additional_requests=""):
 
 def on_suggest_recipes():
     """Handler for the 'Suggest Recipes' button; disable it while waiting for the API response, then display suggestions."""
-    api_key = "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"  # Replace with your actual API key or load it securely
+    api_key = "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"
     additional = additional_entry.get().strip()
     # Update the button state and text to inform the user
     btn_recipes.config(text="Please wait...", state="disabled")
@@ -273,13 +272,13 @@ def treeview_sort_column(tv, col, reverse):
     tv.heading(col, command=lambda: treeview_sort_column(tv, col, not reverse))
 
 # -----------------------
-# GUI Setup and Modern Styling
+# GUI Setup
 # -----------------------
 
 root = tk.Tk()
 root.title("Smart Household Inventory Management System")
 
-# Apply a modern ttk theme and custom fonts
+# ttk theme and custom fonts
 style = ttk.Style(root)
 style.theme_use("clam")
 style.configure("Treeview", font=("Helvetica", 10), rowheight=25)
